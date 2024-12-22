@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::Instruction;
 
 declare_id!("FQRP7BsLL83pktuo4yYHABntASh9xa4wo9nCpDpwydzy");
 
@@ -40,6 +41,60 @@ pub mod meme_fund {
        
         Ok(())
     }
+
+    // Create a new meme registry
+    pub fn create_meme_registry(ctx: Context<CreateMemeRegistry>, meme_id: [u8; 16]) -> Result<()> {        
+        let registry = &mut ctx.accounts.registry;
+        let clock = Clock::get().unwrap();
+        let state = &ctx.accounts.state;
+        
+        registry.meme_id = meme_id.clone();
+        registry.total_funds = 0;
+        registry.start_time = clock.unix_timestamp;
+        registry.end_time = clock.unix_timestamp + state.fund_duration;
+        registry.authority = ctx.accounts.authority.key();
+        registry.contributor_count = 0;
+        registry.mint = Pubkey::default();
+        registry.unclaimed_rewards = 0;
+        registry.claimed_count = 0;
+
+        // Emit event
+        emit!(MemeRegistryCreated {
+            meme_id,
+            start_time: registry.start_time,
+            end_time: registry.end_time,
+        });
+
+        Ok(())
+    }
+
+
+}
+
+// States
+#[account]
+pub struct State {
+    pub fee_recipient: Pubkey,
+    pub max_buy_amount: u64,
+    pub min_buy_amount: u64,
+    pub authority: Pubkey,
+    pub fund_duration: i64,
+    pub max_fund_limit: u64,
+    pub commission_rate: u8,
+    pub token_claim_available_time: i64,
+}
+
+#[account]
+pub struct MemeRegistry {
+    pub meme_id: [u8; 16],
+    pub total_funds: u64,
+    pub start_time: i64,
+    pub end_time: i64,
+    pub authority: Pubkey,
+    pub contributor_count: u64,
+    pub mint: Pubkey,
+    pub unclaimed_rewards: u64,
+    pub claimed_count: u64,
 }
 
 #[derive(Accounts)]
@@ -55,6 +110,43 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(meme_id: [u8; 16])]
+pub struct CreateMemeRegistry<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 16 + 8 + 8 + 8 + 32 + 8 + 32 + 8 + 8, // discriminator + meme_id + total_funds + start_time + end_time + authority +  contributor_count + mint + unclaimed_rewards + claimed_count
+        seeds = [b"registry", meme_id.as_ref()],
+        bump
+    )]
+    pub registry: Account<'info, MemeRegistry>,
+    /// CHECK: This account is only used as a PDA for receiving SOL
+    #[account(
+        seeds = [b"vault", meme_id.as_ref()],
+        bump,
+    )]
+    pub vault: UncheckedAccount<'info>,
+    #[account(
+        seeds = [b"state"],
+        bump,
+        has_one = authority
+    )]
+    pub state: Account<'info, State>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+
+// Events
+#[event]
+pub struct MemeRegistryCreated {
+    pub meme_id: [u8; 16],
+    pub start_time: i64,
+    pub end_time: i64,
 }
 
 #[error_code]
