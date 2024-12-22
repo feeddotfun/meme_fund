@@ -4,6 +4,7 @@
         "cdylib",
         "codegen",
         "Devnet",
+        "lamports",
         "serde",
         "solana"
     ]
