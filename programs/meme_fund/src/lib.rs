@@ -1,4 +1,8 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::Instruction;
+use anchor_lang::solana_program::{program::invoke_signed};
+use anchor_spl::token::{self, Token, TokenAccount, Mint};
+use anchor_spl::associated_token::{AssociatedToken, Create as ATACreate};
 
 declare_id!("FQRP7BsLL83pktuo4yYHABntASh9xa4wo9nCpDpwydzy");
 
@@ -7,6 +11,9 @@ const MAX_SOL_AMOUNT: u64 = 2_000_000_000; // 2 SOL in lamports
 const MAX_FUND_LIMIT: u64 = 20_000_000_000; // 20 SOL in lamports
 const MAX_COMMISSION_RATE: u8 = 10; // 10%
 const MAX_TOKEN_CLAIM_AVAILABLE_TIME: i64 = 60 * 60 * 24; // 24 hours
+
+// Include the generated IDL constants
+include!(concat!(env!("OUT_DIR"), "/pump_idl.rs"));
 
 #[program]
 pub mod meme_fund {
@@ -163,6 +170,170 @@ pub mod meme_fund {
         Ok(())
     }
 
+    // Start Meme creation and buying process
+    pub fn start_meme(
+        ctx: Context<StartMeme>,
+        meme_id: [u8; 16],
+        name: String,
+        symbol: String,
+        uri: String,
+        buy_amount: u64,
+        max_sol_cost: u64,
+    ) -> Result<()> {
+        let pump_program_id = ctx.accounts.pump_program.key();
+
+        require!(name.len() <= 32, MemeError::NameTooLong);
+        require!(symbol.len() <= 10, MemeError::SymbolTooLong);
+
+        let vault_seeds: &[&[u8]] = &[
+            b"vault",
+            meme_id.as_ref(),
+            &[ctx.bumps.vault],
+        ];
+        // Create token instruction
+        let create_discriminator: [u8; 8] = CREATE_DISCRIMINATOR;
+
+        let mut create_data = Vec::with_capacity(create_discriminator.len() + name.len() + symbol.len() + uri.len() + 12);
+        create_data.extend_from_slice(&create_discriminator);
+        create_data.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        create_data.extend_from_slice(name.as_bytes());
+        create_data.extend_from_slice(&(symbol.len() as u32).to_le_bytes());
+        create_data.extend_from_slice(symbol.as_bytes());
+        create_data.extend_from_slice(&(uri.len() as u32).to_le_bytes());
+        create_data.extend_from_slice(uri.as_bytes());
+
+        let create_accounts = vec![
+            AccountMeta::new(ctx.accounts.mint.key(), true),
+            AccountMeta::new(ctx.accounts.mint_authority.key(), false),
+            AccountMeta::new(ctx.accounts.bonding_curve.key(), false),
+            AccountMeta::new(ctx.accounts.associated_bonding_curve.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.global.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.mpl_token_metadata.key(), false),
+            AccountMeta::new(ctx.accounts.metadata.key(), false),
+            AccountMeta::new(ctx.accounts.vault.key(), true),
+            AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.associated_token_program.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.rent.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.pump_program.key(), false),
+        ];
+
+        let create_ix = Instruction {
+            program_id: pump_program_id,
+            accounts: create_accounts,
+            data: create_data,
+        };
+
+        // Buy instruction
+        let buy_discriminator: [u8; 8] = BUY_DISCRIMINATOR;
+
+        let mut buy_data = Vec::with_capacity(buy_discriminator.len() + 16);
+        buy_data.extend_from_slice(&buy_discriminator);
+        buy_data.extend_from_slice(&buy_amount.to_le_bytes());
+        buy_data.extend_from_slice(&max_sol_cost.to_le_bytes());
+
+        let buy_accounts = vec![
+            AccountMeta::new_readonly(ctx.accounts.global.key(), false),
+            AccountMeta::new(ctx.accounts.fee_recipient.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.mint.key(), false),
+            AccountMeta::new(ctx.accounts.bonding_curve.key(), false),
+            AccountMeta::new(ctx.accounts.associated_bonding_curve.key(), false),
+            AccountMeta::new(ctx.accounts.associated_user.key(), false),
+            AccountMeta::new(ctx.accounts.vault.key(), true),
+            AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.rent.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.pump_program.key(), false),
+        ];
+
+        let buy_ix = Instruction {
+            program_id: pump_program_id,
+            accounts: buy_accounts,
+            data: buy_data,
+        };
+
+        // Execute instructions
+        invoke_signed(
+            &create_ix,
+            &[
+                ctx.accounts.mint.to_account_info(),
+                ctx.accounts.mint_authority.to_account_info(),
+                ctx.accounts.bonding_curve.to_account_info(),
+                ctx.accounts.associated_bonding_curve.to_account_info(),
+                ctx.accounts.global.to_account_info(),
+                ctx.accounts.mpl_token_metadata.to_account_info(),
+                ctx.accounts.metadata.to_account_info(),
+                ctx.accounts.vault.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.associated_token_program.to_account_info(),
+                ctx.accounts.rent.to_account_info(),
+                ctx.accounts.event_authority.to_account_info(),
+                ctx.accounts.pump_program.to_account_info(),
+            ],
+            &[vault_seeds]
+        )?;
+
+        // Create the associated token account using a CPI
+        msg!("Attempting to create Associated Token Account");
+        let create_ata_accounts = ATACreate {
+            payer: ctx.accounts.authority.to_account_info(),
+            associated_token: ctx.accounts.associated_user.to_account_info(),
+            authority: ctx.accounts.vault.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+            token_program: ctx.accounts.token_program.to_account_info(),
+        };
+
+        match anchor_spl::associated_token::create_idempotent(CpiContext::new(
+            ctx.accounts.associated_token_program.to_account_info(),
+            create_ata_accounts,
+        )) {
+            Ok(_) => msg!("Associated Token Account created successfully"),
+            Err(e) => {
+                msg!("Error creating Associated Token Account: {:?}", e);
+                return Err(MemeError::ATACreationFailed.into());
+            }
+        }
+
+
+        invoke_signed(
+            &buy_ix,
+            &[
+                ctx.accounts.global.to_account_info(),
+                ctx.accounts.fee_recipient.to_account_info(),
+                ctx.accounts.mint.to_account_info(),
+                ctx.accounts.bonding_curve.to_account_info(),
+                ctx.accounts.associated_bonding_curve.to_account_info(),
+                ctx.accounts.associated_user.to_account_info(),
+                ctx.accounts.vault.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.rent.to_account_info(),
+                ctx.accounts.event_authority.to_account_info(),
+                ctx.accounts.pump_program.to_account_info(),
+            ],
+            &[vault_seeds]
+        )?;
+
+        let registry = &mut ctx.accounts.registry;
+        registry.mint = ctx.accounts.mint.key();
+
+        // Emit event
+        emit!(MemeStarted {
+            meme_id,
+            mint: ctx.accounts.mint.key(),
+            name,
+            symbol,
+            uri,
+            total_funds: registry.total_funds, 
+        });
+
+        Ok(())
+    }
+
 
 }
 
@@ -284,6 +455,57 @@ pub struct Contribute<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct StartMeme<'info> {
+    #[account(mut)]
+    pub registry: Account<'info, MemeRegistry>,
+    /// CHECK: This account is used as a PDA for receiving and sending SOL
+    #[account(
+        mut,
+        seeds = [b"vault", registry.meme_id.as_ref()],
+        bump
+    )]
+    pub vault: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub mint: Signer<'info>,
+    /// CHECK: This account is checked in the instruction
+    #[account(mut)]
+    pub mint_authority: UncheckedAccount<'info>,
+    /// CHECK: This account is checked in the instruction
+    #[account(mut)]
+    pub bonding_curve: UncheckedAccount<'info>,
+    /// CHECK: This account is checked in the instruction
+    #[account(mut)]
+    pub associated_bonding_curve: UncheckedAccount<'info>,
+    /// CHECK: This account is checked in the instruction
+    pub global: UncheckedAccount<'info>,
+    /// CHECK: This account is checked in the instruction
+    pub mpl_token_metadata: UncheckedAccount<'info>,
+    /// CHECK: This account is checked in the instruction
+    #[account(mut)]
+    pub metadata: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        constraint = authority.key() == registry.authority
+    )]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    /// CHECK: This is not dangerous because we don't read or write from this account
+    pub associated_token_program: UncheckedAccount<'info>,
+    pub rent: Sysvar<'info, Rent>,
+    /// CHECK: This account is checked in the instruction
+    pub event_authority: UncheckedAccount<'info>,
+    /// CHECK: This account is checked in the instruction
+    pub pump_program: UncheckedAccount<'info>,
+    /// CHECK: This account is checked in the instruction
+    #[account(mut)]
+    pub fee_recipient: UncheckedAccount<'info>,
+    /// CHECK: This account is checked in the instruction
+    #[account(mut)]
+    pub associated_user: UncheckedAccount<'info>,
+}
+
 
 // Events
 #[event]
@@ -301,6 +523,16 @@ pub struct ContributionMade {
     pub commission_amount: u64,
     pub net_contribution_amount: u64,
     pub timestamp: i64,
+}
+
+#[event]
+pub struct MemeStarted {
+    pub meme_id: [u8; 16],
+    pub mint: Pubkey,
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
+    pub total_funds: u64,
 }
 
 #[error_code]
@@ -327,4 +559,10 @@ pub enum MemeError {
     ExceedsMaxFundLimit,
     #[msg("Maximum number of contributors reached")]
     MaxContributorsReached,
+    #[msg("Name must be 32 characters or less")]
+    NameTooLong,
+    #[msg("Symbol must be 10 characters or less")]
+    SymbolTooLong,
+    #[msg("Failed to create Associated Token Account")]
+    ATACreationFailed,
 }

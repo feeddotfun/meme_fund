@@ -5,7 +5,9 @@
         "codegen",
         "Devnet",
         "lamports",
+        "raydium",
         "serde",
-        "solana"
+        "solana",
+        "Sysvar"
     ]
 }
