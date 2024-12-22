@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::instruction::Instruction;
 
 declare_id!("FQRP7BsLL83pktuo4yYHABntASh9xa4wo9nCpDpwydzy");
 
@@ -69,6 +68,102 @@ pub mod meme_fund {
     }
 
 
+    // Contribute to a meme vault
+    pub fn contribute(ctx: Context<Contribute>, meme_id: [u8; 16], amount: u64) -> Result<()> {
+        let state = &ctx.accounts.state;  
+        let registry = &mut ctx.accounts.registry;
+        let contribution = &mut ctx.accounts.contribution;
+        let clock = Clock::get().unwrap();
+
+        // Ensure the amount is greater than or equal to the minimum allowed
+        require!(amount >= state.min_buy_amount, MemeError::BelowMinAmount);
+
+        // Ensure the amount does not exceed the maximum allowed
+        require!(amount <= state.max_buy_amount, MemeError::ExceedsMaxAmount);
+
+        // Ensure the meme id is valid
+        require!(registry.meme_id == meme_id, MemeError::InvalidMemeId);
+
+        let current_time = clock.unix_timestamp;
+
+        // Ensure the meme registry has not expired 
+        require!(current_time < registry.end_time, MemeError::FundExpired);
+
+        // Check if the contributor has enough balance
+        require!(ctx.accounts.contributor.lamports() >= amount, MemeError::InsufficientBalance);
+
+        // Calculate the commission amount and contribution amount
+        let commission_amount = amount
+            .checked_mul(state.commission_rate as u64)
+            .ok_or(MemeError::ArithmeticOverflow)?
+            .checked_div(100)
+            .ok_or(MemeError::ArithmeticOverflow)?;
+
+        let net_contribution_amount = amount
+            .checked_sub(commission_amount)
+            .ok_or(MemeError::ArithmeticOverflow)?;
+
+        contribution.meme_id = meme_id.clone();
+        contribution.contributor = ctx.accounts.contributor.key();
+        contribution.amount = net_contribution_amount;
+        contribution.timestamp = clock.unix_timestamp;
+
+        registry.total_funds = registry.total_funds
+            .checked_add(net_contribution_amount)
+            .ok_or(MemeError::ArithmeticOverflow)?;
+
+        // Check if adding this contribution would exceed the max fund limit
+        require!(
+            registry.total_funds + amount <= state.max_fund_limit,
+            MemeError::ExceedsMaxFundLimit
+        );
+            
+        registry.contributor_count = registry.contributor_count
+            .checked_add(1)
+            .ok_or(MemeError::MaxContributorsReached)?;
+
+        // Transfer commission
+        anchor_lang::solana_program::program::invoke(
+            &anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.contributor.key(),
+                &ctx.accounts.fee_recipient.key(),
+                commission_amount,
+            ),
+            &[
+                ctx.accounts.contributor.to_account_info(),
+                ctx.accounts.fee_recipient.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+
+        // Transfer net contribution
+        anchor_lang::solana_program::program::invoke(
+            &anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.contributor.key(),
+                &ctx.accounts.vault.key(),
+                net_contribution_amount,
+            ),
+            &[
+                ctx.accounts.contributor.to_account_info(),
+                ctx.accounts.vault.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;        
+
+        // Emit event
+        emit!(ContributionMade {
+            meme_id: meme_id.clone(),
+            contributor: ctx.accounts.contributor.key(),
+            amount,
+            commission_amount,
+            net_contribution_amount,
+            timestamp: current_time,
+        });
+
+        Ok(())
+    }
+
+
 }
 
 // States
@@ -95,6 +190,15 @@ pub struct MemeRegistry {
     pub mint: Pubkey,
     pub unclaimed_rewards: u64,
     pub claimed_count: u64,
+}
+
+#[account]
+pub struct Contribution {
+    pub meme_id: [u8; 16],
+    pub contributor: Pubkey,
+    pub amount: u64,
+    pub timestamp: i64,
+    pub is_claimed: bool,
 }
 
 #[derive(Accounts)]
@@ -140,6 +244,46 @@ pub struct CreateMemeRegistry<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+#[instruction(meme_id: [u8; 16])]
+pub struct Contribute<'info> {
+    /// CHECK: This account is only used as a PDA for receiving SOL
+    #[account(
+        mut,
+        seeds = [b"vault", meme_id.as_ref()],
+        bump,
+    )]
+    pub vault: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        seeds = [b"registry", meme_id.as_ref()],
+        bump,
+    )]
+    pub registry: Account<'info, MemeRegistry>,
+    #[account(
+        init,
+        payer = contributor,
+        space = 8 + 16 + 32 + 8 + 8 + 1, // discriminator + meme_id + contributor + amount + timestamp + is_claimed
+        seeds = [b"contribution", meme_id.as_ref(), contributor.key().as_ref()],
+        bump
+    )]
+    pub contribution: Account<'info, Contribution>,
+    #[account(mut)]
+    pub contributor: Signer<'info>,
+    #[account(
+        seeds = [b"state"],
+        bump
+    )]
+    pub state: Account<'info, State>,
+    /// CHECK: This is safe because we're checking the address against the one stored in the state account
+    #[account(
+        mut,
+        address = state.fee_recipient @ MemeError::InvalidFeeRecipient
+    )]
+    pub fee_recipient: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 
 // Events
 #[event]
@@ -149,10 +293,38 @@ pub struct MemeRegistryCreated {
     pub end_time: i64,
 }
 
+#[event]
+pub struct ContributionMade {
+    pub meme_id: [u8; 16],
+    pub contributor: Pubkey,
+    pub amount: u64,
+    pub commission_amount: u64,
+    pub net_contribution_amount: u64,
+    pub timestamp: i64,
+}
+
 #[error_code]
 pub enum MemeError {
     #[msg("Invalid fund duration")]
     InvalidFundDuration,
     #[msg("Invalid buy amount: minimum exceeds maximum")]
     InvalidBuyAmount,
+    #[msg("Invalid fee recipient address")]
+    InvalidFeeRecipient,
+    #[msg("Contribution is below the minimum allowed amount")]
+    BelowMinAmount,
+    #[msg("Arithmetic overflow")]
+    ArithmeticOverflow,
+    #[msg("Contribution exceeds maximum allowed amount")]
+    ExceedsMaxAmount,
+    #[msg("Invalid Meme ID")]
+    InvalidMemeId,
+    #[msg("Fund has expired")]
+    FundExpired,
+    #[msg("Insufficient balance")]
+    InsufficientBalance,
+    #[msg("Exceeds maximum fund limit")]
+    ExceedsMaxFundLimit,
+    #[msg("Maximum number of contributors reached")]
+    MaxContributorsReached,
 }
