@@ -10,8 +10,20 @@ jobs:
   build-and-test:
     name: Build and Test
     runs-on: ubuntu-latest
+    env:
+      SOLANA_VERSION: 1.16.0
     steps:
       - uses: actions/checkout@v3
+
+      - name: Cache Solana Tool Suite
+        uses: actions/cache@v3
+        id: cache-solana
+        with:
+          path: |
+            ~/.cache/solana
+            ~/.local/share/solana
+            ~/.solana
+          key: solana-${{ env.SOLANA_VERSION }}
 
       - name: Install Linux Dependencies
         run: |
@@ -26,29 +38,36 @@ jobs:
           components: rustc, cargo
           override: true
 
-      - name: Install Solana CLI
+      - name: Install Solana Tools
+        if: steps.cache-solana.outputs.cache-hit != 'true'
         run: |
-          sh -c "$(curl -sSfL https://release.solana.com/v1.16.0/install)"
+          sh -c "$(curl -sSfL https://release.solana.com/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
           export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
+          solana --version
           solana-keygen new --no-bip39-passphrase
+          solana config set --url localhost
+          cargo install cargo-build-bpf
 
-      - name: Install Anchor CLI and Dependencies
+      - name: Install Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Anchor CLI
         run: |
           npm install -g @coral-xyz/anchor-cli
           cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
           avm install latest
           avm use latest
-          npm install
 
-      - name: Install Solana Build Tools
-        run: |
-          cargo install cargo-build-sbf
-          cargo build-sbf --version
+      - name: Install Project Dependencies
+        run: yarn install
 
       - name: Build Program
-        run: anchor build
+        run: |
+          anchor build
 
       - name: Run Tests
         run: |
-          solana config set --url localhost
           anchor test
