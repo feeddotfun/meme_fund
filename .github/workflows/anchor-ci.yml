@@ -27,6 +27,15 @@ jobs:
           sh -c "$(curl -sSfL https://release.solana.com/v1.18.23/install)"
           export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
           solana-keygen new --no-bip39-passphrase
+          solana config set --url devnet
+          solana-keygen new --no-bip39-passphrase -o /home/runner/.config/solana/devnet.json
+          solana config set --keypair /home/runner/.config/solana/devnet.json
+          # Airdrop
+          for i in {1..5}; do
+            solana airdrop 2 || true
+            sleep 2
+          done
+          solana balance
 
       - name: Install Dependencies
         run: |
@@ -38,4 +47,7 @@ jobs:
         run: |
           export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
           anchor build
+          # Test
+          solana-test-validator &
+          sleep 5
           anchor test
