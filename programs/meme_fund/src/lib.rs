@@ -424,6 +424,164 @@ pub mod meme_fund {
         Ok(())
     }
 
+    // Admin function to claim remaining pump rewards 
+    pub fn admin_claim_rewards(ctx: Context<AdminClaimRewards>, meme_id: [u8; 16]) -> Result<()> {
+        let registry = &mut ctx.accounts.registry;
+
+        // Ensure claimable rewards are available
+        require!(
+            registry.claimed_count == registry.contributor_count,
+            MemeError::NotAllTokensClaimed
+        );
+
+        if registry.unclaimed_rewards > 0 {
+            let amount = registry.unclaimed_rewards;
+
+            let vault_signer_seeds: &[&[u8]] = &[
+                b"vault",
+                meme_id.as_ref(),
+                &[ctx.bumps.vault],
+            ];
+
+            // Transfer the remaining rewards to the fee recipient
+            anchor_lang::solana_program::program::invoke_signed(
+                &anchor_lang::solana_program::system_instruction::transfer(
+                    &ctx.accounts.vault.key(),
+                    &ctx.accounts.fee_recipient.key(),
+                    amount,
+                ),
+                &[
+                    ctx.accounts.vault.to_account_info(),
+                    ctx.accounts.fee_recipient.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                &[vault_signer_seeds],
+            )?;
+
+            registry.unclaimed_rewards = 0;
+
+            Ok(())
+        } else {
+            Err(MemeError::NoRewardsToClaim.into())
+        }
+    }
+
+    // Update the fee recipient wallet address
+    pub fn update_fee_recipient(ctx: Context<UpdateFeeRecipient>, new_fee_recipient: Pubkey) -> Result<()> {
+        let state = &mut ctx.accounts.state;
+        
+        // Ensure the new fee recipient is not the same as the old one
+        let old_wallet = state.fee_recipient;
+        require!(old_wallet != new_fee_recipient, MemeError::SameWalletAddress);
+
+        state.fee_recipient = new_fee_recipient;
+
+        // Emit event
+        emit!(FeeRecipientUpdated {
+            old_wallet,
+            new_wallet: new_fee_recipient,
+        });
+
+        Ok(())
+    }
+
+    // Update the maximum amount that can be contributed to a meme vault
+    pub fn update_max_buy_amount(ctx: Context<UpdateMaxBuyAmount>, new_max_buy_amount: u64) -> Result<()> {        
+        // Ensure the new max buy amount is less than or equal to 2 SOL
+        require!(new_max_buy_amount <= 2_000_000_000, MemeError::ExceedsMaxAllowedAmount);
+        
+        let state = &mut ctx.accounts.state;
+        let old_amount = state.max_buy_amount;
+        state.max_buy_amount = new_max_buy_amount;
+
+        // Emit event
+        emit!(MaxBuyAmountUpdated {
+            old_amount,
+            new_amount: new_max_buy_amount,
+        });
+        
+        Ok(())
+    }
+
+    // Update the minimum amount that can be contributed to a meme vault
+    pub fn update_min_buy_amount(ctx: Context<UpdateMinBuyAmount>, new_min_buy_amount: u64) -> Result<()> {
+        // Ensure the new min buy amount is greater than or equal to 0.1 SOL
+        require!(new_min_buy_amount >= 100_000_000, MemeError::BelowMinAllowedAmount); // 0.1 SOL
+        
+        // Ensure the new min buy amount is less than or equal to the max buy amount
+        require!(new_min_buy_amount <= ctx.accounts.state.max_buy_amount, MemeError::ExceedsMaxBuyAmount);
+        
+        let state = &mut ctx.accounts.state;
+        let old_amount = state.min_buy_amount;
+        state.min_buy_amount = new_min_buy_amount;
+    
+        emit!(MinBuyAmountUpdated {
+            old_amount,
+            new_amount: new_min_buy_amount,
+        });
+        
+        Ok(())
+    }
+
+    // Update the duration of a meme vault
+    pub fn update_fund_duration(ctx: Context<UpdateFundDuration>, new_fund_duration: i64) -> Result<()> {
+        // Ensure the new fund duration is greater than 0
+        require!(new_fund_duration > 0, MemeError::InvalidFundDuration);
+        
+        let state = &mut ctx.accounts.state;
+        let old_duration = state.fund_duration;
+        state.fund_duration = new_fund_duration;
+
+        // Emit event
+        emit!(FundDurationUpdated {
+            old_duration,
+            new_duration: new_fund_duration,
+        });
+
+        Ok(())
+    }
+
+    // Update the maximum amount that can be contributed to single meme vault
+    pub fn update_max_fund_limit(ctx: Context<UpdateMaxFundLimit>, new_max_fund_limit: u64) -> Result<()> {
+        let state = &mut ctx.accounts.state;
+        let old_limit = state.max_fund_limit;
+        state.max_fund_limit = new_max_fund_limit;
+
+        // Emit event
+        emit!(MaxFundLimitUpdated {
+            old_limit,
+            new_limit: new_max_fund_limit,
+        });
+
+        Ok(())
+    }
+
+    // Update commission rate
+    pub fn update_commission_rate(ctx: Context<UpdateCommissionRate>, new_rate: u8) -> Result<()> {
+        require!(new_rate <= MAX_COMMISSION_RATE, MemeError::CommissionRateTooHigh);
+
+        let state = &mut ctx.accounts.state;
+        let old_rate = state.commission_rate;
+        state.commission_rate = new_rate;
+
+        emit!(CommissionRateUpdated {
+            old_rate,
+            new_rate,
+        });
+
+        Ok(())
+    }
+
+    // Update the max token claim available time
+    pub fn update_max_claim_available_time(ctx: Context<UpdateMaxClaimAvailableTime>, new_claim_available_time: i64) -> Result<()> {
+        require!(new_claim_available_time <= MAX_TOKEN_CLAIM_AVAILABLE_TIME, MemeError::InvalidFundDuration);
+        
+        let state = &mut ctx.accounts.state;
+        state.token_claim_available_time = new_claim_available_time;
+
+        Ok(())
+    }
+
 }
 
 // States
@@ -645,6 +803,115 @@ pub struct ClaimTokens<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+#[instruction(meme_id: [u8; 16])]
+pub struct AdminClaimRewards<'info> {
+    #[account(
+        mut,
+        seeds = [b"registry", meme_id.as_ref()],
+        bump,
+    )]
+    pub registry: Account<'info, MemeRegistry>,
+    #[account(seeds = [b"state"], bump, has_one = authority)]
+    pub state: Account<'info, State>,
+    /// CHECK: This account is a PDA, used as vault
+    #[account(
+        mut,
+        seeds = [b"vault", meme_id.as_ref()],
+        bump,
+    )]
+    pub vault: UncheckedAccount<'info>,
+    /// CHECK: This is the fee recipient account, a normal wallet
+    #[account(mut, address = state.fee_recipient @ MemeError::InvalidFeeRecipient)]
+    pub fee_recipient: UncheckedAccount<'info>,
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateFeeRecipient<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump,
+        has_one = authority,
+    )]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateMaxBuyAmount<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump,
+        has_one = authority,
+    )]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateMinBuyAmount<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump,
+        has_one = authority,
+    )]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateFundDuration<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump,
+        has_one = authority,
+    )]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateMaxFundLimit<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump,
+        has_one = authority
+    )]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateCommissionRate<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump,
+        has_one = authority,
+    )]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateMaxClaimAvailableTime<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump,
+        has_one = authority,
+    )]
+    pub state: Account<'info, State>,
+    pub authority: Signer<'info>,
+}
+
 // Events
 #[event]
 pub struct MemeRegistryCreated {
@@ -678,6 +945,42 @@ pub struct TokensClaimed {
     pub meme_id: [u8; 16],
     pub contributor: Pubkey,
     pub amount: u64,
+}
+
+#[event]
+pub struct FeeRecipientUpdated {
+    pub old_wallet: Pubkey,
+    pub new_wallet: Pubkey,
+}
+
+#[event]
+pub struct MaxBuyAmountUpdated {
+    pub old_amount: u64,
+    pub new_amount: u64,
+}
+
+#[event]
+pub struct MinBuyAmountUpdated {
+    pub old_amount: u64,
+    pub new_amount: u64,
+}
+
+#[event]
+pub struct FundDurationUpdated {
+    pub old_duration: i64,
+    pub new_duration: i64,
+}
+
+#[event]
+pub struct MaxFundLimitUpdated {
+    pub old_limit: u64,
+    pub new_limit: u64,
+}
+
+#[event]
+pub struct CommissionRateUpdated {
+    pub old_rate: u8,
+    pub new_rate: u8,
 }
 
 #[error_code]
@@ -722,4 +1025,18 @@ pub enum MemeError {
     ClaimTimeNotReached,
     #[msg("Zero claim amount")]
     ZeroClaimAmount,
+    #[msg("Not all tokens have been claimed yet")]
+    NotAllTokensClaimed,
+    #[msg("No rewards to claim")]
+    NoRewardsToClaim,
+    #[msg("New wallet address is the same as the old one")]
+    SameWalletAddress,
+    #[msg("Exceeds maximum allowed amount of 2 SOL")]
+    ExceedsMaxAllowedAmount,
+    #[msg("New minimum buy amount exceeds the current maximum buy amount")]
+    ExceedsMaxBuyAmount,
+    #[msg("New minimum buy amount is below the allowed minimum of 0.1 SOL")]
+    BelowMinAllowedAmount,
+    #[msg("Commission rate cannot exceed 10%")]
+    CommissionRateTooHigh,
 }
