@@ -2,12 +2,9 @@ name: Anchor Program CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ "master" ]
   pull_request:
-    branches: [ master ]
-
-env:
-  CARGO_TERM_COLOR: always
+    branches: [ "master" ]
 
 jobs:
   build-and-test:
@@ -25,30 +22,33 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          profile: minimal
+          components: rustc, cargo
           override: true
-          components: rustc
 
-      - name: Install Solana
+      - name: Install Solana CLI
         run: |
           sh -c "$(curl -sSfL https://release.solana.com/v1.16.0/install)"
           export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
           solana-keygen new --no-bip39-passphrase
 
-      - name: Install Anchor CLI
+      - name: Install Anchor CLI and Dependencies
         run: |
-          npm install -g @project-serum/anchor-cli
+          npm install -g @coral-xyz/anchor-cli
           cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
           avm install latest
           avm use latest
+          npm install
+
+      - name: Install Solana Build Tools
+        run: |
+          cargo install cargo-build-sbf
+          cargo build-sbf --version
 
       - name: Build Program
         run: anchor build
 
-      - name: Run Rust Tests
-        run: cargo test --manifest-path programs/meme_fund/Cargo.toml
-        
-      - name: Install Node dependencies
-        run: yarn install
-
-      - name: Run Anchor Tests
-        run: anchor test
+      - name: Run Tests
+        run: |
+          solana config set --url localhost
+          anchor test
