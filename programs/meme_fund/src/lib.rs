@@ -334,6 +334,95 @@ pub mod meme_fund {
         Ok(())
     }
 
+    // Claim token funds from a meme vault
+    pub fn claim_tokens(ctx: Context<ClaimTokens>, _meme_id: [u8; 16]) -> Result<()> {
+        let registry = &mut ctx.accounts.registry;
+        let contribution = &mut ctx.accounts.contribution;
+        let vault_token_account = &ctx.accounts.vault_token_account;
+        let state = &ctx.accounts.state;
+
+        // Check if the meme_id matches
+        require!(registry.meme_id == _meme_id, MemeError::InvalidMemeId);
+
+        // Ensure the contribution has not been claimed
+        require!(!contribution.is_claimed, MemeError::AlreadyClaimed);
+
+        // Check for zero amount
+        require!(contribution.amount > 0, MemeError::ZeroContributionAmount);
+
+        // Check if the vault has enough tokens
+        require!(registry.total_funds > 0, MemeError::NoFundsInRegistry);        
+
+        let clock = Clock::get()?;
+        let current_time = clock.unix_timestamp;
+
+        let claim_available_time = registry.end_time.checked_add(state.token_claim_available_time)
+        .ok_or(MemeError::ArithmeticOverflow)?;
+
+        // Ensure the claim time has been reached
+        require!(
+            current_time >= claim_available_time,
+            MemeError::ClaimTimeNotReached
+        );
+
+        let user_tokens = (contribution.amount as u128)
+            .checked_mul(vault_token_account.amount as u128)
+            .and_then(|v| v.checked_div(registry.total_funds as u128))
+            .ok_or(MemeError::ArithmeticOverflow)?;
+
+        // Check for zero amount
+        require!(user_tokens > 0, MemeError::ZeroClaimAmount);
+
+        // Check if the vault has enough tokens
+        require!(vault_token_account.amount >= user_tokens as u64, MemeError::InsufficientVaultBalance);
+        
+        let vault_seeds: &[&[u8]] = &[
+            b"vault",
+            registry.meme_id.as_ref(),
+            &[ctx.bumps.vault],
+        ];
+
+        token::transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                token::TransferChecked {
+                    from: ctx.accounts.vault_token_account.to_account_info(),
+                    to: ctx.accounts.user_token_account.to_account_info(),
+                    authority: ctx.accounts.vault.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                },
+                &[vault_seeds],
+            ),
+            user_tokens as u64,
+            ctx.accounts.mint.decimals,
+        )?;
+
+        // Update the registry's total funds and the vault's token balance
+        registry.total_funds = registry.total_funds.checked_sub(contribution.amount).ok_or(MemeError::ArithmeticOverflow)?;
+
+        // Set as claimed after successful transfer
+        contribution.is_claimed = true;
+        registry.claimed_count = registry.claimed_count
+            .checked_add(1)
+            .ok_or(MemeError::ArithmeticOverflow)?;
+
+        // Check if this is the last claim
+        if registry.claimed_count == registry.contributor_count {
+            // Update unclaimed_rewards for manual claim later
+            let vault_balance = ctx.accounts.vault.lamports();
+            if vault_balance > 0 {
+                registry.unclaimed_rewards = vault_balance;
+            }
+        }
+        
+        emit!(TokensClaimed {
+            meme_id: registry.meme_id,
+            contributor: contribution.contributor,
+            amount: user_tokens as u64,
+        });
+        
+        Ok(())
+    }
 
 }
 
@@ -506,6 +595,55 @@ pub struct StartMeme<'info> {
     pub associated_user: UncheckedAccount<'info>,
 }
 
+#[derive(Accounts)]
+#[instruction(meme_id: [u8; 16])]
+pub struct ClaimTokens<'info> {
+    #[account(
+        mut,
+        seeds = [b"registry", meme_id.as_ref()],
+        bump,
+    )]
+    pub registry: Account<'info, MemeRegistry>,
+    #[account(
+        mut,
+        seeds = [b"contribution", meme_id.as_ref(), contributor.key().as_ref()],
+        bump,
+        has_one = contributor,
+    )]
+    pub contribution: Account<'info, Contribution>,
+    #[account(mut)]
+    pub contributor: Signer<'info>,
+    /// CHECK: This account is used as a PDA for vault operations
+    #[account(
+        seeds = [b"vault", meme_id.as_ref()],
+        bump,
+        constraint = registry.meme_id == meme_id @ MemeError::InvalidMemeId
+    )]
+    pub vault: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = vault,
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+    #[account(
+        init_if_needed,
+        payer = contributor,
+        associated_token::mint = mint,
+        associated_token::authority = contributor,
+    )]
+    pub user_token_account: Account<'info, TokenAccount>,
+    #[account(address = registry.mint)]
+    pub mint: Account<'info, Mint>,
+    #[account(
+        seeds = [b"state"],
+        bump
+    )]
+    pub state: Account<'info, State>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
 
 // Events
 #[event]
@@ -533,6 +671,13 @@ pub struct MemeStarted {
     pub symbol: String,
     pub uri: String,
     pub total_funds: u64,
+}
+
+#[event]
+pub struct TokensClaimed {
+    pub meme_id: [u8; 16],
+    pub contributor: Pubkey,
+    pub amount: u64,
 }
 
 #[error_code]
@@ -565,4 +710,16 @@ pub enum MemeError {
     SymbolTooLong,
     #[msg("Failed to create Associated Token Account")]
     ATACreationFailed,
+    #[msg("Tokens have already been claimed")]
+    AlreadyClaimed,
+    #[msg("Zero contribution amount")]
+    ZeroContributionAmount,
+    #[msg("Insufficient vault balance")]
+    InsufficientVaultBalance,
+    #[msg("No funds in registry")]
+    NoFundsInRegistry,
+    #[msg("Token claim time has not been reached yet")]
+    ClaimTimeNotReached,
+    #[msg("Zero claim amount")]
+    ZeroClaimAmount,
 }
