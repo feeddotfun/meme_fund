@@ -6,6 +6,7 @@
         "cdylib",
         "codegen",
         "Devnet",
+        "dtolnay",
         "keygen",
         "Keypair",
         "keypairs",

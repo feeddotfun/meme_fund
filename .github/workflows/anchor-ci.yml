@@ -12,14 +12,30 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install Dependencies and Run Tests
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.8.0'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.80.0
+
+      - name: Install Solana
+        run: |
+          sh -c "$(curl -sSfL https://release.solana.com/v1.18.23/install)"
+          export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
+          solana-keygen new --no-bip39-passphrase
+
+      - name: Install Dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y pkg-config build-essential libudev-dev
-          sh -c "$(curl -sSfL https://release.solana.com/v1.16.0/install)"
-          export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
           npm install -g @coral-xyz/anchor-cli
-          npm install -g yarn
           yarn install
-          solana-keygen new --no-bip39-passphrase
+
+      - name: Build and Test
+        run: |
+          export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
           anchor build
           anchor test
