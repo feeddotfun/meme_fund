@@ -24,7 +24,7 @@ startup_wait = 10000
 url = "localhost"
 
 [[test.validator.clone]]
-address = "Pump1KeyzQhexRZXkTbPNcGxVrQBKgeSkkciY3ayGkSD"
+address = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 
 [[test.validator.clone]]
 address = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
