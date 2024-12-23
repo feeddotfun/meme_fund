@@ -12,6 +12,7 @@
         "keypairs",
         "lamports",
         "libudev",
+        "localnet",
         "raydium",
         "rustc",
         "serde",

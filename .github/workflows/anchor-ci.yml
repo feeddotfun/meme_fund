@@ -27,28 +27,7 @@ jobs:
           sh -c "$(curl -sSfL https://release.solana.com/v1.18.23/install)"
           export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
           solana-keygen new --no-bip39-passphrase
-          solana config set --url devnet
-          solana-keygen new --no-bip39-passphrase -o /home/runner/.config/solana/devnet.json
-          solana config set --keypair /home/runner/.config/solana/devnet.json
-          # Multiple endpoints to try airdrop from
-          ENDPOINTS=(
-            "https://api.devnet.solana.com"
-            "https://dev1.solana.com"
-            "https://dev2.solana.com"
-            "https://dev3.solana.com"
-          )
-          for endpoint in "${ENDPOINTS[@]}"; do
-            echo "Trying airdrop from $endpoint"
-            solana config set --url $endpoint
-            for i in {1..3}; do
-              solana airdrop 2 || true
-              sleep 3
-            done
-          done
-          # Set back to main devnet endpoint
-          solana config set --url https://api.devnet.solana.com
-          echo "Final balance:"
-          solana balance
+          solana config set --url localhost
 
       - name: Install Dependencies
         run: |
@@ -60,7 +39,11 @@ jobs:
         run: |
           export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
           anchor build
-          # Test
-          solana-test-validator &
+          # Start validator with required programs
+          solana-test-validator \
+            --clone Pump1KeyzQhexRZXkTbPNcGxVrQBKgeSkkciY3ayGkSD \
+            --clone TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA \
+            --clone ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL \
+            --reset &
           sleep 5
           anchor test
