@@ -1,11 +1,18 @@
 {
     "cSpell.words": [
+        "blockhash",
+        "borsh",
         "bpfel",
         "cdylib",
         "codegen",
         "Devnet",
+        "keygen",
+        "Keypair",
+        "keypairs",
         "lamports",
+        "libudev",
         "raydium",
+        "rustc",
         "serde",
         "solana",
         "Sysvar"

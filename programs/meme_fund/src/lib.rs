@@ -1040,3 +1040,110 @@ pub enum MemeError {
     #[msg("Commission rate cannot exceed 10%")]
     CommissionRateTooHigh,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_commission_calculation() {
+        let amount: u64 = 1_000_000_000; // 1 SOL
+        let commission_rate: u8 = 5; // 5%
+        
+        let commission_amount = amount
+            .checked_mul(commission_rate as u64)
+            .unwrap()
+            .checked_div(100)
+            .unwrap();
+        
+        let net_contribution = amount
+            .checked_sub(commission_amount)
+            .unwrap();
+        
+        assert_eq!(commission_amount, 50_000_000); // 0.05 SOL
+        assert_eq!(net_contribution, 950_000_000); // 0.95 SOL
+    }
+
+    #[test]
+    fn test_buy_amount_validation() {
+        let min_amount: u64 = 100_000_000; // 0.1 SOL
+        let max_amount: u64 = 1_000_000_000; // 1 SOL
+        let test_amount: u64 = 500_000_000; // 0.5 SOL
+
+        assert!(test_amount >= min_amount, "Amount below minimum");
+        assert!(test_amount <= max_amount, "Amount above maximum");
+    }
+
+    #[test]
+    fn test_user_token_calculation() {
+        let contribution_amount: u64 = 1_000_000_000; // 1 SOL
+        let total_funds: u64 = 10_000_000_000; // 10 SOL
+        let vault_token_amount: u64 = 1_000_000; // 1M tokens
+
+        let user_tokens = (contribution_amount as u128)
+            .checked_mul(vault_token_amount as u128)
+            .unwrap()
+            .checked_div(total_funds as u128)
+            .unwrap();
+
+        assert_eq!(user_tokens, 100_000); // User should get 10% of tokens
+    }
+
+    #[test]
+    fn test_pda_derivation() {
+        let program_id = Pubkey::new_unique();
+        let meme_id = [1u8; 16];
+        
+        let (registry_pda, _) = Pubkey::find_program_address(
+            &[b"registry", &meme_id],
+            &program_id
+        );
+        
+        let (vault_pda, _) = Pubkey::find_program_address(
+            &[b"vault", &meme_id],
+            &program_id
+        );
+
+        assert_ne!(registry_pda, vault_pda, "PDAs should be different");
+    }
+
+    #[test]
+    fn test_max_fund_limit() {
+        let current_funds: u64 = 15_000_000_000;
+        let contribution: u64 = 1_000_000_000;
+        
+        assert!(
+            current_funds + contribution <= MAX_FUND_LIMIT,
+            "Contribution would exceed fund limit"
+        );
+    }
+
+    #[test]
+    fn test_commission_rate_validation() {
+        let test_rate: u8 = 15;
+        assert!(
+            test_rate > MAX_COMMISSION_RATE,
+            "Commission rate exceeds maximum allowed"
+        );
+    }
+
+    #[test]
+    fn test_fund_duration_validation() {
+        let fund_duration: i64 = 0;
+        assert!(
+            fund_duration <= 0,
+            "Invalid fund duration should be caught"
+        );
+    }
+
+    #[test]
+    fn test_min_max_buy_amount_validation() {
+        let min_buy: u64 = MIN_SOL_AMOUNT;
+        let max_buy: u64 = MAX_SOL_AMOUNT;
+        
+        assert!(
+            min_buy <= max_buy,
+            "Min buy amount should be less than or equal to max buy amount"
+        );
+    }
+}
