@@ -27,7 +27,7 @@ jobs:
           sh -c "$(curl -sSfL https://release.solana.com/v1.18.23/install)"
           export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
           solana-keygen new --no-bip39-passphrase
-          solana config set --url localhost
+          solana config set --url http://127.0.0.1:8899
 
       - name: Install Dependencies
         run: |
@@ -38,12 +38,14 @@ jobs:
       - name: Build and Test
         run: |
           export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
+          # Build first
           anchor build
-          # Start validator with required programs
+          # Start local validator with required programs
           solana-test-validator \
-            --clone 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P \
-            --clone TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA \
-            --clone ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL \
+            --clone 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P --url https://api.devnet.solana.com \
+            --clone TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA --url https://api.devnet.solana.com \
+            --clone ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL --url https://api.devnet.solana.com \
             --reset &
-          sleep 5
+          sleep 10
+          # Run tests
           anchor test

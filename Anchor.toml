@@ -21,7 +21,7 @@ test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
 startup_wait = 10000
 
 [test.validator]
-url = "localhost"
+url = "https://api.devnet.solana.com"
 
 [[test.validator.clone]]
 address = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
