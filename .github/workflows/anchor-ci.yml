@@ -6,24 +6,16 @@ on:
   pull_request:
     branches: [ "master" ]
 
+env:
+  SOLANA_CLI_VERSION: 1.16.0
+  NODE_VERSION: 18
+
 jobs:
   build-and-test:
     name: Build and Test
     runs-on: ubuntu-latest
-    env:
-      SOLANA_VERSION: 1.16.0
     steps:
       - uses: actions/checkout@v3
-
-      - name: Cache Solana Tool Suite
-        uses: actions/cache@v3
-        id: cache-solana
-        with:
-          path: |
-            ~/.cache/solana
-            ~/.local/share/solana
-            ~/.solana
-          key: solana-${{ env.SOLANA_VERSION }}
 
       - name: Install Linux Dependencies
         run: |
@@ -38,36 +30,31 @@ jobs:
           components: rustc, cargo
           override: true
 
-      - name: Install Solana Tools
-        if: steps.cache-solana.outputs.cache-hit != 'true'
+      - name: Install Solana CLI
         run: |
-          sh -c "$(curl -sSfL https://release.solana.com/v${{ env.SOLANA_VERSION }}/install)"
+          sh -c "$(curl -sSfL https://release.solana.com/v${{ env.SOLANA_CLI_VERSION }}/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
-          export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
+          source $HOME/.cargo/env
+          echo "PATH=$HOME/.local/share/solana/install/active_release/bin:$PATH" >> $GITHUB_ENV
           solana --version
           solana-keygen new --no-bip39-passphrase
-          solana config set --url localhost
-          cargo install cargo-build-bpf
 
-      - name: Install Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install Anchor CLI
+      - name: Install Anchor Dependencies
         run: |
           npm install -g @coral-xyz/anchor-cli
-          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
-          avm install latest
-          avm use latest
+          npm install -g yarn
+          yarn install
 
-      - name: Install Project Dependencies
-        run: yarn install
-
-      - name: Build Program
+      - name: Build and Test
         run: |
+          echo $PATH
+          solana --version
+          solana config set --url localhost
+          anchor --version
           anchor build
-
-      - name: Run Tests
-        run: |
           anchor test
