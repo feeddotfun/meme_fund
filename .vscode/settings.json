@@ -13,6 +13,7 @@
         "lamports",
         "libudev",
         "localnet",
+        "pkill",
         "raydium",
         "rustc",
         "serde",

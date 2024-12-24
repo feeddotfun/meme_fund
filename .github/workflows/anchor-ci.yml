@@ -26,7 +26,9 @@ jobs:
         run: |
           sh -c "$(curl -sSfL https://release.solana.com/v1.18.23/install)"
           export PATH="/home/runner/.local/share/solana/install/active_release/bin:$PATH"
-          solana-keygen new --no-bip39-passphrase
+          mkdir -p /home/runner/.config/solana/
+          solana-keygen new --outfile /home/runner/.config/solana/id.json --no-bip39-passphrase
+          solana config set --keypair /home/runner/.config/solana/id.json
           solana config set --url http://127.0.0.1:8899
 
       - name: Install Dependencies
@@ -49,3 +51,5 @@ jobs:
           sleep 10
           # Run tests
           anchor test
+          # Kill the validator after tests
+          pkill solana-test-validator || true
