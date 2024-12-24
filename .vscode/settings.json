@@ -13,11 +13,14 @@
         "lamports",
         "libudev",
         "localnet",
+        "NLED",
         "pkill",
         "raydium",
         "rustc",
         "serde",
         "solana",
-        "Sysvar"
+        "Sysvar",
+        "uuidv",
+        "Xkxx"
     ]
 }
